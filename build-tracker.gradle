@@ -1,0 +1,31 @@
+// Build time tracker - records every Gradle build to ~/.build-tracker/YYYY-MM-DD.csv
+// Data: time, duration_ms, status, project
+// Run 'bt' to view results
+
+def buildStartTime = System.currentTimeMillis()
+
+gradle.buildFinished { result ->
+    def duration = System.currentTimeMillis() - buildStartTime
+    def status = result.failure ? "FAILED" : "SUCCESS"
+
+    def now = new Date()
+    def date = now.format("yyyy-MM-dd")
+    def time = now.format("HH:mm:ss")
+
+    def dataDir = new File(System.getProperty("user.home") + "/.build-tracker")
+    if (!dataDir.exists()) dataDir.mkdirs()
+
+    def csvFile = new File(dataDir, "${date}.csv")
+    if (!csvFile.exists()) {
+        csvFile.text = "time,duration_ms,status,project\n"
+    }
+
+    def projectName
+    try {
+        projectName = gradle.rootProject.name ?: "unknown"
+    } catch (Exception e) {
+        projectName = "unknown"
+    }
+
+    csvFile << "${time},${duration},${status},${projectName}\n"
+}

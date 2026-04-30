@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# bt - Gradle build time viewer
+# Data source: ~/.build-tracker/YYYY-MM-DD.csv
+# Usage: bt [today|week|month|log|<N>|<YYYY-MM>]
+
+DATA_DIR="$HOME/.build-tracker"
+TODAY=$(date +%Y-%m-%d)
+TODAY_FILE="$DATA_DIR/$TODAY.csv"
+
+cmd="${1:-today}"
+
+_bt_range() {
+  local days="$1" found=0 grand_total=0 grand_count=0 grand_fail=0
+  for i in $(seq $((days-1)) -1 0); do
+    local d
+    d=$(date -v-${i}d +%Y-%m-%d 2>/dev/null || date -d "-${i} days" +%Y-%m-%d 2>/dev/null)
+    local f="$DATA_DIR/$d.csv"
+    if [[ -f "$f" ]]; then
+      tail -n +2 "$f" | awk -F, -v date="$d" '
+      {total += $2; count++; if ($3=="SUCCESS") success++}
+      END {
+        t = int(total / 1000)
+        if (t < 60) tstr = t "s"
+        else tstr = int(t/60) "m " int(t%60) "s"
+        printf "%s  %3d build%s  %7s  (%d fail)\n",
+          date, count, (count==1?" ":"s"), tstr, count-success
+      }'
+      found=1
+    fi
+  done
+  if [[ $found -eq 0 ]]; then
+    echo "No builds in last ${days} days."
+  else
+    # grand total across all days
+    local all_files=()
+    for i in $(seq $((days-1)) -1 0); do
+      local d
+      d=$(date -v-${i}d +%Y-%m-%d 2>/dev/null || date -d "-${i} days" +%Y-%m-%d 2>/dev/null)
+      [[ -f "$DATA_DIR/$d.csv" ]] && all_files+=("$DATA_DIR/$d.csv")
+    done
+    if [[ ${#all_files[@]} -gt 0 ]]; then
+      tail -q -n +2 "${all_files[@]}" | awk -F, '
+      {total += $2; count++; if ($3!="SUCCESS") fail++}
+      END {
+        t = int(total / 1000)
+        if (t < 60) tstr = t "s"
+        else tstr = int(t/60) "m " int(t%60) "s"
+        printf "\nTotal: %d builds | %s | %d fail\n", count, tstr, fail
+      }'
+    fi
+  fi
+}
+
+_bt_month() {
+  local ym="$1" found=0
+  for f in "$DATA_DIR"/${ym}-*.csv; do
+    [[ -f "$f" ]] || continue
+    local d
+    d=$(basename "$f" .csv)
+    tail -n +2 "$f" | awk -F, -v date="$d" '
+    {total += $2; count++; if ($3=="SUCCESS") success++}
+    END {
+      t = int(total / 1000)
+      if (t < 60) tstr = t "s"
+      else tstr = int(t/60) "m " int(t%60) "s"
+      printf "%s  %3d build%s  %7s  (%d fail)\n",
+        date, count, (count==1?" ":"s"), tstr, count-success
+    }'
+    found=1
+  done
+  if [[ $found -eq 0 ]]; then
+    echo "No builds for $ym."
+  else
+    cat "$DATA_DIR"/${ym}-*.csv 2>/dev/null | grep -v "^time," | awk -F, '
+    {total += $2; count++; if ($3!="SUCCESS") fail++}
+    END {
+      t = int(total / 1000)
+      if (t < 60) tstr = t "s"
+      else tstr = int(t/60) "m " int(t%60) "s"
+      printf "\nTotal: %d builds | %s | %d fail\n", count, tstr, fail
+    }'
+  fi
+}
+
+case "$cmd" in
+  today|t)
+    if [[ ! -f "$TODAY_FILE" ]]; then
+      echo "No builds today."
+      exit 0
+    fi
+    tail -n +2 "$TODAY_FILE" | awk -F, '
+    function fmt(ms,    s, m) {
+      s = ms / 1000
+      if (s < 60) return sprintf("%5.1fs", s)
+      m = int(s / 60); s = int(s % 60)
+      return sprintf("%dm %02ds", m, s)
+    }
+    {
+      total += $2
+      count++
+      if ($3 == "SUCCESS") success++
+      printf "%s  %8s  %-8s  %s\n", $1, fmt($2), $3, $4
+    }
+    END {
+      if (count > 0) {
+        t = int(total / 1000)
+        if (t < 60) tstr = t "s"
+        else tstr = int(t/60) "m " int(t%60) "s"
+        printf "\n%d build%s | %s total | %d success  %d fail\n",
+          count, (count==1?"":"s"), tstr, success, count-success
+      }
+    }'
+    ;;
+
+  week|w)
+    _bt_range 7
+    ;;
+
+  month|m)
+    _bt_range 30
+    ;;
+
+  [0-9][0-9][0-9][0-9]-[0-9][0-9])
+    _bt_month "$cmd"
+    ;;
+
+  [0-9]*)
+    _bt_range "$cmd"
+    ;;
+
+  log|l)
+    if [[ ! -f "$TODAY_FILE" ]]; then
+      echo "No builds today."
+      exit 0
+    fi
+    cat "$TODAY_FILE"
+    ;;
+
+  help|-h|--help)
+    echo "bt - build time tracker"
+    echo ""
+    echo "Usage:"
+    echo "  bt               today's builds + summary"
+    echo "  bt today         same as above"
+    echo "  bt week          last 7 days"
+    echo "  bt month         last 30 days"
+    echo "  bt <N>           last N days  (e.g. bt 14)"
+    echo "  bt <YYYY-MM>     specific month  (e.g. bt 2026-04)"
+    echo "  bt log           raw CSV for today"
+    ;;
+
+  *)
+    echo "Unknown command: $1. Run 'bt help' for usage."
+    exit 1
+    ;;
+esac
